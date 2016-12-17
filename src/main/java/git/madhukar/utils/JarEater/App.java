@@ -3,11 +3,14 @@ package git.madhukar.utils.JarEater;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import javax.swing.JFileChooser;
 import javax.swing.JOptionPane;
 
 /**
@@ -17,94 +20,123 @@ import javax.swing.JOptionPane;
  */
 public class App {
 
-    private static String MAIN_PROGRAM = null;
+	private static List<String> commandLineOfTargetApplication;
 
-    // Driver code
-    public static void main(String[] args) {
+	public static void main(String[] args) {
 
-        String jarDir = JOptionPane.showInputDialog("Directory containing all runtime jars: ");
+		try {
 
-        try {
+			Set<File> jarSet = createCommandLineArgs();
 
-            Set<String> jarSet = Arrays.stream(new File(jarDir).listFiles()).map(x -> x.getAbsolutePath()).collect(
-                    Collectors.toSet());
+			validateRunWithAllJars();
 
-            MAIN_PROGRAM = JOptionPane.showInputDialog("Name of Main-Class: ");
+			analyzeJarDependency(jarSet);
 
-            validateRunWithAllJars(jarSet);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
 
-            analyzeJarDependency(jarSet);
+	}
 
-        }
-        catch (Exception e) {
-            e.printStackTrace();
-        }
+	private static Set<File> createCommandLineArgs() {
+		File jarDir = getParentJarDir();
 
-    }
+		Set<File> jarSet = Arrays.stream(jarDir.listFiles())
+				.collect(Collectors.toSet());
 
-    private static void analyzeJarDependency(Set<String> currentJarSet) {
-        Set<String> allJars = new HashSet<>(currentJarSet);
+		String MAIN_PROGRAM = JOptionPane.showInputDialog("Commandline argument: e.g. java -DsysProp=V1 -cp a.jar;b.jar;c.jar  foo.bar.Main  arg1 arg2");
+		
+		String[] cmdArr = MAIN_PROGRAM.split("\\s+");
+		commandLineOfTargetApplication=(Arrays.asList(cmdArr));
 
-        for (String jarPath : allJars) {
+		System.out.println("Target Command line arguments: " + commandLineOfTargetApplication);
 
-            currentJarSet.remove(jarPath);
+		return jarSet;
 
-            if (!runProgram(currentJarSet)) {
-                currentJarSet.add(jarPath); // Jar is needed. Undo remove
-                System.out.println("This jar is needed: " + jarPath);
-            }
-            else {
+	}
 
-                new File(jarPath).delete(); // Ate a jar!!
-                System.out.println(" Eating a jar at  " + jarPath);
-            }
-        }
+	private static File getParentJarDir() {
+		JFileChooser chooser = new JFileChooser();
+		chooser.setCurrentDirectory(new java.io.File("/my/shared"));
+		chooser.setDialogTitle("Directory containing jars which needs cleaning :");
+		chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+		chooser.setAcceptAllFileFilterUsed(false);
 
-    }
+		if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
+			System.out.println("getCurrentDirectory(): " + chooser.getCurrentDirectory());
+			System.out.println("getSelectedFile() : " + chooser.getSelectedFile());
+		} else {
+			System.out.println("No Selection ");
+			System.exit(-1);
+		}
 
-    /**
-     * @param jarSet
-     */
-    private static void validateRunWithAllJars(Set<String> jarSet) {
-        // Initial run with all jars
-        boolean test = runProgram(jarSet);
-        if (!test) {
-            System.out.println("Program didnt run even with all jars included! Exiting ");
-            System.exit(-1);
-        }
-    }
+		File jarDir = chooser.getSelectedFile();
+		return jarDir;
+	}
 
-    private static boolean runProgram(Set<String> jarSet) {
-        boolean isSuccess = false;
+	private static void analyzeJarDependency(Set<File> jarFileSet) {
 
-        String jarSetString = "\"" + jarSet.stream().collect(Collectors.joining(File.pathSeparator)) + "\"";
+		for (File origFile : jarFileSet) {
 
-        try {
-            ProcessBuilder ps = new ProcessBuilder("java", "-cp", jarSetString,
-                    MAIN_PROGRAM);
+			String origFilePath = origFile.getAbsolutePath();
 
-            System.out.println("Command line: " + ps.command());
+			File newName = new File(origFile.getAbsolutePath() + ".bak");  
+			
+			if (!origFile.renameTo(newName)) {
+				throw new RuntimeException("Unable rename jar file:" + origFilePath);
+			}
 
-            ps.redirectErrorStream(true);
-            Process pr = ps.start();
+			if (runTargetApplication()) {
+				System.out.println(" Eating a jar at  " + origFilePath);
 
-            try (BufferedReader in = new BufferedReader(new InputStreamReader(pr.getInputStream()));) {
+			} else {
 
-                while ((in.readLine()) != null) {
-                }
+				if (!newName.renameTo(origFile)) {
+					throw new RuntimeException("Unable restore jar file:" + origFilePath);
+				}
+				System.out.println("This jar is needed: " + origFilePath);
 
-                int wait = pr.waitFor();
-                int exitStatus = pr.exitValue();
+			}
+		}
 
-                isSuccess = wait == 0 && exitStatus == 0;
-            }
-        }
-        catch (Exception e) {
-            e.printStackTrace();
-        }
-        return isSuccess;
-    }
+	}
+
+	/**
+	 * @param jarSet
+	 */
+	private static void validateRunWithAllJars() {
+		// Initial run with all jars
+		if (!runTargetApplication()) {
+			throw new RuntimeException("Program didnt run with all jars included! ");
+		}
+	}
+
+	private static boolean runTargetApplication() {
+		boolean isSuccess = false;
+
+		try {
+
+			ProcessBuilder ps = new ProcessBuilder(commandLineOfTargetApplication);
+
+			ps.redirectErrorStream(true);
+			Process pr = ps.start();
+
+			try (BufferedReader in = new BufferedReader(new InputStreamReader(pr.getInputStream()));) {
+
+				String line;
+				while ((line=in.readLine()) != null) {
+					System.out.println(line);
+				}
+
+				int wait = pr.waitFor();
+				int exitStatus = pr.exitValue();
+
+				isSuccess = wait == 0 && exitStatus == 0;
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return isSuccess;
+	}
 
 }
-
-
